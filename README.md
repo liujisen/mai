@@ -1,150 +1,166 @@
-# A股涨幅筛选器
+# A股Mai指标筛选器
 
-这是一个用于筛选A股市场中涨幅超过指定阈值的股票的Python项目。
+> 基于Mai技术指标的A股全市场智能筛选系统
 
-## 功能特点
+## 快速开始
 
-- 使用 [Ashare](https://github.com/mpquant/Ashare) 库获取实时A股行情数据
-- 自动获取所有A股股票代码列表
-- 计算每只股票的涨幅（基于收盘价）
-- 筛选出涨幅大于5%的股票
-- 将结果保存为CSV文件
-- 支持进度显示和错误处理
+```bash
+# 测试运行（30秒，扫描100只股票）
+python3 run_mai_screener_small.py
+
+# 完整运行（10分钟，扫描全市场5477只股票）
+python3 run_mai_screener.py
+```
+
+## 当前配置
+
+```python
+时间范围: 最近3天
+信号组合: 放量启动 OR 底背离
+趋势要求: EMA6 > EMA18（上升趋势）
+```
+
+## 修改配置
+
+编辑 `run_mai_screener.py` 文件：
+
+```python
+RECENT_DAYS = 3                          # 时间窗口：1, 3, 5, 10...
+TARGET_SIGNALS = ['放量启动', '底背离']  # 信号组合
+MATCH_MODE = 'OR'                        # OR=满足任一，AND=全部满足
+REQUIRE_UPTREND = True                   # True=上升趋势，False=不限
+```
+
+### 可用信号类型
+
+| 信号 | 说明 | 强度 |
+|------|------|------|
+| 放量启动 | 金叉（EMA6上穿EMA18）+ 成交量放大 | ⭐ |
+| 底背离 | 价格新低但MACD不创新低（反转信号） | ⭐⭐ |
+| 二浪回踩 | 上升趋势中回踩EMA6支撑 | ⭐ |
+| 共振机会 | 谷值信号 + 底背离（最强组合） | ⭐⭐⭐ |
+
+### 配置示例
+
+```python
+# 激进型（更多结果）
+RECENT_DAYS = 5
+TARGET_SIGNALS = ['放量启动']
+MATCH_MODE = 'OR'
+REQUIRE_UPTREND = False
+
+# 保守型（精选结果）
+RECENT_DAYS = 3
+TARGET_SIGNALS = ['底背离', '共振机会']
+MATCH_MODE = 'AND'
+REQUIRE_UPTREND = True
+```
+
+## 查看结果
+
+筛选结果自动保存到 `results/` 目录：
+
+```bash
+# 查看最新结果
+ls results/mai_buy_signals_*.csv
+
+# 用Excel或其他工具打开CSV文件
+```
+
+结果包含字段：
+- 股票代码、股票名称
+- 最新价、EMA6、EMA18、止损线
+- 买入信号、信号强度、信号日期
+- 趋势状态、更新日期
+
+## 安装依赖
+
+```bash
+# 基础依赖（必需）
+pip3 install pandas requests --user
+
+# 推荐依赖（提速50%）
+pip3 install akshare --user
+```
 
 ## 项目结构
 
 ```
 A/
-├── Ashare.py              # Ashare库主文件
-├── stock_screener.py      # 主筛选脚本
-├── test_basic.py          # 基础功能测试脚本
-├── requirements.txt       # Python依赖包
-├── README.md              # 项目说明文档
-└── results/               # 筛选结果输出目录
-    └── stocks_above_5percent_YYYYMMDD.csv
+├── run_mai_screener.py       主运行脚本（配置+启动）
+├── stock_screener_mai.py     筛选核心逻辑（568行）
+├── mai_indicator.py          Mai指标计算（435行）
+├── Ashare.py                 股票数据获取（70行）
+├── requirements.txt          依赖列表
+└── results/                  筛选结果目录
 ```
 
-## 安装依赖
+## 技术说明
 
-确保你已安装 Python 3.7 或更高版本，然后运行：
+### Mai指标体系
 
-```bash
-pip3 install -r requirements.txt --user
-```
+- **趋势判断**: EMA6（快线）、EMA18（慢线）
+- **止损线**: EMA6 - 2.5 × ATR（平均波幅）
+- **背离检测**: 基于MACD指标
+- **峰谷识别**: ZIG之字转向算法
 
-## 使用方法
+### 数据源
 
-### 1. 运行基础测试
+- 首选：akshare库（5477只A股列表）
+- 备用：东方财富API
+- 行情：新浪财经 + 腾讯财经（双重保障）
 
-在运行完整筛选之前，建议先运行测试脚本验证功能：
+## 常见问题
 
-```bash
-python3 test_basic.py
-```
+### 找不到符合条件的股票？
 
-这将测试：
-- Ashare库是否正常工作
-- 股票列表获取功能
-- 涨幅计算功能
-- 小范围筛选测试
+- 增加时间范围：`RECENT_DAYS = 5` 或 `10`
+- 放宽信号限制：只使用 `['放量启动']`
+- 取消趋势限制：`REQUIRE_UPTREND = False`
 
-### 2. 运行完整筛选
+### 结果太多？
 
-```bash
-python3 stock_screener.py
-```
+- 缩小时间范围：`RECENT_DAYS = 1`
+- 使用AND模式：`MATCH_MODE = 'AND'`
+- 要求上升趋势：`REQUIRE_UPTREND = True`
 
-程序将：
-1. 自动获取所有A股股票列表（约5000只）
-2. 逐个获取股票的最近2天数据
-3. 计算涨幅
-4. 筛选出涨幅 > 5% 的股票
-5. 显示结果并保存为CSV文件
+### 运行太慢？
 
-**注意**：完整筛选可能需要5-10分钟，请耐心等待。
+- 安装akshare加速：`pip3 install akshare --user`
+- 先用测试版验证：`python3 run_mai_screener_small.py`
 
-### 3. 查看结果
-
-筛选结果将保存在两个位置：
-- `./stocks_above_5percent_YYYYMMDD.csv` （项目根目录）
-- `./results/stocks_above_5percent_YYYYMMDD.csv` （results目录）
-
-CSV文件包含以下字段：
-- 股票代码
-- 股票名称
-- 昨日收盘价
-- 今日开盘价
-- 今日收盘价
-- 最高价
-- 最低价
-- 涨幅(%)
-- 成交量
-- 日期
-
-## 自定义配置
-
-### 修改涨幅阈值
-
-编辑 `stock_screener.py` 的 `main()` 函数：
+### 如何测试单只股票？
 
 ```python
-# 将阈值从5.0改为其他值，例如3.0
-df = screen_stocks(threshold=3.0, delay=0.05)
+from Ashare import get_price
+from mai_indicator import MaiIndicator
+
+# 获取数据
+df = get_price('sh600519', frequency='1d', count=100)
+
+# 计算指标
+indicator = MaiIndicator(df)
+result = indicator.calculate_all()
+
+# 打印最新信号
+indicator.print_latest_signals()
 ```
 
-### 修改请求延迟
+## 性能指标
 
-为避免请求过快被限制，可以调整延迟参数（秒）：
-
-```python
-df = screen_stocks(threshold=5.0, delay=0.1)  # 增加到0.1秒
-```
-
-## 涨幅计算公式
-
-```
-涨幅(%) = (今日收盘价 - 昨日收盘价) / 昨日收盘价 × 100
-```
-
-## 注意事项
-
-1. **网络要求**：需要能够访问新浪财经和腾讯财经的API
-2. **交易日限制**：非交易日运行可能无法获取最新数据
-3. **数据准确性**：数据来自第三方免费接口，仅供参考，不作为投资依据
-4. **请求限制**：建议不要过快请求，避免IP被限制
-5. **停牌股票**：停牌股票会自动跳过，不会影响整体运行
-
-## 依赖说明
-
-- **pandas** (>=1.3.0): 数据处理和分析
-- **requests** (>=2.26.0): HTTP请求库，用于获取股票数据
-
-## 故障排除
-
-### 问题1: 无法获取股票列表
-
-如果无法从新浪财经API获取股票列表，程序会自动使用备用方案（测试少量股票）。你可以手动提供股票代码列表。
-
-### 问题2: 部分股票数据获取失败
-
-这是正常现象，可能的原因：
-- 股票停牌
-- 网络超时
-- API限制
-
-程序会自动跳过这些股票并继续处理其他股票。
-
-### 问题3: 运行时间过长
-
-如果遍历5000只股票时间太长，可以：
-1. 减少延迟时间（可能增加被限制的风险）
-2. 筛选特定范围的股票（需修改代码）
-3. 使用多线程（需自行实现）
-
-## 许可证
-
-本项目使用的 Ashare 库来自 [mpquant/Ashare](https://github.com/mpquant/Ashare)，感谢原作者的贡献。
+- 测试版（100只）：约30秒
+- 完整版（5477只）：约10分钟
+- 内存占用：<500MB
+- CPU使用：单核
 
 ## 免责声明
 
-本工具仅用于学习和研究目的，获取的数据不构成任何投资建议。投资有风险，入市需谨慎。
+本工具仅供学习研究使用，筛选结果不构成投资建议。投资有风险，入市需谨慎。
+
+---
+
+**准备好了？开始筛选！** 🚀
+
+```bash
+python3 run_mai_screener.py
+```
