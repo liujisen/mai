@@ -10,14 +10,14 @@ from stock_screener_mai import main
 if __name__ == '__main__':
     # ========== 增强版配置 ==========
     
-    # 基本面筛选配置
+    # 基本面筛选配置（完全不限制）
     fundamental_config = {
-        'enable': True,              # 启用基本面筛选
-        'min_price': 3.0,           # 最低价格 3元（排除垃圾股）
-        'max_price': 200.0,         # 最高价格 200元
-        'min_market_cap': 30e8,     # 最小流通市值 30亿
-        'max_market_cap': 500e8,    # 最大流通市值 500亿（排除超大盘股）
-        'exclude_st': True,         # 排除ST股
+        'enable': False,            # 禁用基本面筛选（不限制任何条件）
+        'min_price': 0.0,           # 最低价格（不限制）
+        'max_price': 10000.0,       # 最高价格（不限制）
+        'min_market_cap': 0,        # 最小流通市值（不限制）
+        'max_market_cap': 1e15,     # 最大流通市值（不限制）
+        'exclude_st': False,        # 不排除ST股
     }
     
     # 技术信号配置
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     print("\n【增强功能】")
     print("  ✓ OBV能量潮 - 识别主力资金流向")
     print("  ✓ 量比分析 - 避免爆量陷阱（1.2-3.5倍为温和放量）")
-    print("  ✓ 基本面筛选 - 市值、价格、ST股过滤")
+    print("  ✓ 无基本面限制 - 包含所有股票（含ST股）")
     print("  ✓ MA18角度 - 避免震荡市假金叉")
     print("  ✓ 布林带收敛 - 捕捉变盘前夜")
     print("  ✓ 隐蔽吸筹 - 价格横盘但OBV创新高")
@@ -49,9 +49,9 @@ if __name__ == '__main__':
     print("  ✓ 数据优化 - 从100天减至60天，减少网络请求")
     
     print("\n【筛选条件】")
-    print(f"  价格范围: {fundamental_config['min_price']}-{fundamental_config['max_price']}元")
-    print(f"  市值范围: {fundamental_config['min_market_cap']/1e8:.0f}-{fundamental_config['max_market_cap']/1e8:.0f}亿")
-    print(f"  排除ST股: {'是' if fundamental_config['exclude_st'] else '否'}")
+    print(f"  价格范围: 不限制")
+    print(f"  市值范围: 不限制")
+    print(f"  ST股: 包含（不排除）")
     print(f"  信号组合: {' 或 '.join(target_signals)}")
     print(f"  上升趋势: {'必须' if require_uptrend else '不要求'}")
     print("\n" + "="*70 + "\n")
