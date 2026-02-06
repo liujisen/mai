@@ -138,6 +138,59 @@ class MaiIndicator:
         
         return zig_values
     
+    def calculate_obv(self) -> pd.Series:
+        """
+        计算OBV能量潮指标
+        OBV是通过累计成交量来判断资金流向的指标
+        价格上涨时加上当日成交量，价格下跌时减去当日成交量
+        """
+        obv = pd.Series(0.0, index=self.df.index)
+        obv.iloc[0] = self.df['VOL'].iloc[0]
+        
+        for i in range(1, len(self.df)):
+            if self.df['CLOSE'].iloc[i] > self.df['CLOSE'].iloc[i-1]:
+                # 价格上涨，加上成交量
+                obv.iloc[i] = obv.iloc[i-1] + self.df['VOL'].iloc[i]
+            elif self.df['CLOSE'].iloc[i] < self.df['CLOSE'].iloc[i-1]:
+                # 价格下跌，减去成交量
+                obv.iloc[i] = obv.iloc[i-1] - self.df['VOL'].iloc[i]
+            else:
+                # 价格持平，OBV不变
+                obv.iloc[i] = obv.iloc[i-1]
+        
+        return obv
+    
+    def calculate_volume_ratio(self) -> pd.Series:
+        """
+        计算量比（当日成交量/5日平均成交量）
+        用于判断成交量的放大程度
+        """
+        vol_ma5 = self.calculate_ma(self.df['VOL'], 5)
+        volume_ratio = self.df['VOL'] / vol_ma5
+        return volume_ratio
+    
+    def calculate_ma_slope(self, ma_series: pd.Series) -> pd.Series:
+        """
+        计算均线的斜率（角度）
+        正值表示向上，负值表示向下
+        """
+        slope = (ma_series - self.ref(ma_series, 1)) / self.ref(ma_series, 1)
+        return slope
+    
+    def calculate_bollinger_bands(self) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+        """
+        计算布林带
+        返回：上轨、中轨、下轨、带宽
+        """
+        ma20 = self.calculate_ma(self.df['CLOSE'], 20)
+        std20 = self.df['CLOSE'].rolling(20).std()
+        
+        upper = ma20 + 2 * std20
+        lower = ma20 - 2 * std20
+        bandwidth = (upper - lower) / ma20
+        
+        return upper, ma20, lower, bandwidth
+    
     def calculate_all(self) -> pd.DataFrame:
         """计算所有指标"""
         
@@ -220,16 +273,79 @@ class MaiIndicator:
         # ========== 5. 共振机会 ==========
         self.result['共振机会'] = IS_TROUGH & 底背离_condition
         
-        # ========== 6. 放量启动（金叉+放量） ==========
+        # ========== 6. OBV能量潮（新增）==========
+        self.result['OBV'] = self.calculate_obv()
+        self.result['OBV_MA30'] = self.calculate_ma(self.result['OBV'], 30)
+        self.result['OBV向上'] = self.result['OBV'] > self.result['OBV_MA30']
+        
+        # OBV斜率（判断资金流入速度）
+        obv_slope = (self.result['OBV'] - self.ref(self.result['OBV'], 1)) / (self.ref(self.result['OBV'], 1).abs() + 1)
+        self.result['OBV斜率'] = obv_slope
+        self.result['OBV加速'] = obv_slope > 0
+        
+        # 隐蔽吸筹：价格横盘但OBV创新高（主力悄悄吸筹）
+        obv_high_20 = self.result['OBV'].rolling(20).max()
+        price_high_10 = self.df['HIGH'].rolling(10).max()
+        price_low_10 = self.df['LOW'].rolling(10).min()
+        price_range = (price_high_10 - price_low_10) / self.df['CLOSE']
+        
+        self.result['隐蔽吸筹'] = (
+            (self.result['OBV'] >= obv_high_20) &  # OBV创新高
+            (price_range < 0.10)  # 价格波动小于10%
+        )
+        
+        # ========== 7. 量比分析（新增）==========
+        self.result['量比'] = self.calculate_volume_ratio()
+        
+        # 温和放量：1.2 < 量比 < 3.5（避免爆量陷阱）
+        self.result['温和放量'] = (
+            (self.result['量比'] > 1.2) & 
+            (self.result['量比'] < 3.5)
+        )
+        
+        # 放量过猛警告（可能是出货）
+        self.result['放量过猛'] = self.result['量比'] > 4.0
+        
+        # ========== 8. MA18角度分析（新增）==========
+        ma18_slope = self.calculate_ma_slope(self.result['EMA18'])
+        self.result['MA18斜率'] = ma18_slope
+        self.result['MA18向上'] = ma18_slope > 0
+        self.result['MA18走平'] = (ma18_slope >= -0.001) & (ma18_slope <= 0.001)
+        
+        # ========== 9. 布林带分析（新增）==========
+        upper, middle, lower, bandwidth = self.calculate_bollinger_bands()
+        self.result['布林上轨'] = upper
+        self.result['布林中轨'] = middle
+        self.result['布林下轨'] = lower
+        self.result['布林带宽'] = bandwidth
+        
+        # 极限收敛（变盘前夜）
+        self.result['极限收敛'] = (
+            (bandwidth < 0.10) &  # 带宽极窄
+            (self.df['CLOSE'] > middle)  # 站上中轨
+        )
+        
+        # ========== 10. 放量启动（优化版）==========
         IS_VOL_UP = self.df['VOL'] > self.calculate_ma(self.df['VOL'], 5)
         IS_GOLD_CROSS = self.cross(self.result['VAR_SHORT'], self.result['VAR_LONG'])
+        
+        # 原版放量启动（保留兼容性）
         REAL_BUY = IS_GOLD_CROSS & IS_VOL_UP
+        
+        # 增强版放量启动（更严格的条件）
+        REAL_BUY_V2 = (
+            IS_GOLD_CROSS &  # 金叉
+            self.result['温和放量'] &  # 温和放量（非爆量）
+            self.result['OBV向上'] &  # OBV向上
+            (self.result['MA18向上'] | self.result['MA18走平'])  # MA18向上或走平
+        )
         
         self.result['IS_VOL_UP'] = IS_VOL_UP
         self.result['IS_GOLD_CROSS'] = IS_GOLD_CROSS
-        self.result['放量启动'] = REAL_BUY
+        self.result['放量启动'] = REAL_BUY  # 原版
+        self.result['放量启动_增强'] = REAL_BUY_V2  # 增强版
         
-        # ========== 7. 二浪回踩 ==========
+        # ========== 11. 二浪回踩 ==========
         IS_BULL = self.result['VAR_SHORT'] > self.result['VAR_LONG']
         IS_DIP = (self.df['LOW'] <= self.result['VAR_SHORT']) & (self.df['CLOSE'] > self.result['STOP_LOSS_LINE'])
         IS_RED_CANDLE = self.df['CLOSE'] > self.df['OPEN']
@@ -238,7 +354,7 @@ class MaiIndicator:
         BUY_DIP = IS_BULL & IS_DIP & IS_RED_CANDLE & (bars_since_gold > 3)
         self.result['二浪回踩'] = BUY_DIP
         
-        # ========== 8. 离场警报 ==========
+        # ========== 12. 离场警报 ==========
         IS_STOP = self.cross(self.result['STOP_LOSS_LINE'], self.df['CLOSE']) & (self.result['VAR_SHORT'] > self.result['VAR_LONG'])
         self.result['离场警报'] = IS_STOP
         
@@ -273,8 +389,22 @@ class MaiIndicator:
             '峰值信号': row['IS_PEAK'],
             '共振机会': row['共振机会'],
             '放量启动': row['放量启动'],
+            '放量启动_增强': row['放量启动_增强'],
             '二浪回踩': row['二浪回踩'],
             '离场警报': row['离场警报'],
+            # 新增OBV指标
+            'OBV': row['OBV'],
+            'OBV向上': row['OBV向上'],
+            'OBV加速': row['OBV加速'],
+            '隐蔽吸筹': row['隐蔽吸筹'],
+            # 新增量比指标
+            '量比': row['量比'],
+            '温和放量': row['温和放量'],
+            '放量过猛': row['放量过猛'],
+            # 新增MA18角度
+            'MA18向上': row['MA18向上'],
+            # 新增布林带
+            '极限收敛': row['极限收敛'],
         }
         
         return signals

@@ -14,18 +14,209 @@ from Ashare import get_price
 from mai_indicator import MaiIndicator
 
 
+# ========== 基本面数据获取函数 ==========
+
+def get_fundamental_data(stock_code):
+    """
+    获取股票基本面数据（市值、价格、ST标识等）
+    
+    参数:
+        stock_code: 股票代码，格式如 'sh600519' 或 '600519'
+    
+    返回:
+        dict: 包含基本面数据，失败返回None
+    """
+    try:
+        # 提取纯数字代码
+        if stock_code.startswith('sh') or stock_code.startswith('sz'):
+            pure_code = stock_code[2:]
+        else:
+            pure_code = stock_code
+        
+        # 尝试使用akshare获取实时数据
+        try:
+            import akshare as ak
+            
+            # 获取实时行情
+            df_realtime = ak.stock_zh_a_spot_em()
+            stock_data = df_realtime[df_realtime['代码'] == pure_code]
+            
+            if len(stock_data) > 0:
+                row = stock_data.iloc[0]
+                
+                # 提取关键数据
+                name = row['名称']
+                price = float(row['最新价'])
+                market_cap = float(row['总市值']) if '总市值' in row else 0  # 单位：元
+                circulating_market_cap = float(row['流通市值']) if '流通市值' in row else 0
+                
+                # 判断是否ST股
+                is_st = 'ST' in name or 'st' in name or '*' in name
+                
+                return {
+                    'code': pure_code,
+                    'name': name,
+                    'price': price,
+                    'market_cap': market_cap,
+                    'circulating_market_cap': circulating_market_cap,
+                    'is_st': is_st,
+                }
+        except ImportError:
+            pass
+        except Exception:
+            pass
+        
+        # 备用方案：从东方财富获取
+        try:
+            url = f'http://push2.eastmoney.com/api/qt/stock/get?secid={get_secid(stock_code)}&fields=f57,f58,f43,f60,f116,f117'
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            
+            if data and 'data' in data and data['data']:
+                info = data['data']
+                name = info.get('f58', '')
+                price = info.get('f43', 0) / 100.0  # 价格单位转换
+                circulating_market_cap = info.get('f116', 0)  # 流通市值（万元）
+                market_cap = info.get('f117', 0)  # 总市值（万元）
+                
+                is_st = 'ST' in name or 'st' in name or '*' in name
+                
+                return {
+                    'code': pure_code,
+                    'name': name,
+                    'price': price,
+                    'market_cap': market_cap * 10000,  # 转换为元
+                    'circulating_market_cap': circulating_market_cap * 10000,
+                    'is_st': is_st,
+                }
+        except Exception:
+            pass
+        
+        return None
+        
+    except Exception:
+        return None
+
+
+def get_secid(stock_code):
+    """将股票代码转换为东方财富的secid格式"""
+    if stock_code.startswith('sh') or stock_code.startswith('6'):
+        code = stock_code[2:] if stock_code.startswith('sh') else stock_code
+        return f'1.{code}'
+    else:
+        code = stock_code[2:] if stock_code.startswith('sz') else stock_code
+        return f'0.{code}'
+
+
+def apply_fundamental_filters(stock_code, stock_name, price, fundamental_config=None):
+    """
+    应用基本面筛选条件
+    
+    参数:
+        stock_code: 股票代码
+        stock_name: 股票名称
+        price: 当前价格
+        fundamental_config: 筛选配置字典
+    
+    返回:
+        tuple: (是否通过筛选, 不通过原因)
+    """
+    if fundamental_config is None:
+        fundamental_config = {
+            'enable': True,
+            'min_price': 3.0,        # 最低价格
+            'max_price': 200.0,      # 最高价格
+            'min_market_cap': 30e8,  # 最小流通市值（30亿）
+            'max_market_cap': 500e8, # 最大流通市值（500亿）
+            'exclude_st': True,      # 排除ST股
+        }
+    
+    if not fundamental_config.get('enable', True):
+        return True, None
+    
+    # 1. 价格筛选
+    min_price = fundamental_config.get('min_price', 3.0)
+    max_price = fundamental_config.get('max_price', 200.0)
+    if price < min_price:
+        return False, f"价格过低({price:.2f}<{min_price})"
+    if price > max_price:
+        return False, f"价格过高({price:.2f}>{max_price})"
+    
+    # 2. 获取基本面数据
+    fundamental = get_fundamental_data(stock_code)
+    if fundamental is None:
+        # 如果无法获取基本面数据，只进行简单筛选
+        if fundamental_config.get('exclude_st', True):
+            if 'ST' in stock_name or 'st' in stock_name or '*' in stock_name:
+                return False, "ST股票"
+        return True, None
+    
+    # 3. ST股筛选
+    if fundamental_config.get('exclude_st', True):
+        if fundamental['is_st']:
+            return False, "ST股票"
+    
+    # 4. 市值筛选
+    circulating_cap = fundamental['circulating_market_cap']
+    if circulating_cap > 0:
+        min_cap = fundamental_config.get('min_market_cap', 30e8)
+        max_cap = fundamental_config.get('max_market_cap', 500e8)
+        
+        if circulating_cap < min_cap:
+            return False, f"市值过小({circulating_cap/1e8:.1f}亿<{min_cap/1e8:.0f}亿)"
+        if circulating_cap > max_cap:
+            return False, f"市值过大({circulating_cap/1e8:.1f}亿>{max_cap/1e8:.0f}亿)"
+    
+    return True, None
+
+
 def get_stock_list():
     """
     获取所有A股股票代码列表（主板、创业板、科创板）
-    使用东方财富API获取
+    优先使用akshare库获取
     """
     print("正在获取A股全部股票列表...")
     all_stocks = []
     seen_codes = set()  # 用于去重
     
+    # 方法2: 优先尝试使用akshare获取（如果已安装）
+    try:
+        print("方法2: 尝试使用akshare库获取...")
+        import akshare as ak
+        
+        # 获取沪深A股
+        df_a = ak.stock_info_a_code_name()
+        
+        for _, row in df_a.iterrows():
+            code = row['code']
+            name = row['name']
+            
+            # 确定前缀
+            if code.startswith('6') or code.startswith('688'):
+                prefix = 'sh'
+            else:
+                prefix = 'sz'
+            
+            if code not in seen_codes:
+                seen_codes.add(code)
+                all_stocks.append({
+                    'code': f'{prefix}{code}',
+                    'name': name,
+                    'original_code': code
+                })
+        
+        if len(all_stocks) > 100:
+            print(f"✓ 通过akshare成功获取 {len(all_stocks)} 只股票")
+            return all_stocks
+            
+    except ImportError:
+        print("  akshare未安装，尝试其他方法")
+    except Exception as e:
+        print(f"  akshare获取失败: {e}，尝试其他方法")
+    
     # 方法1: 尝试从东方财富获取
     try:
-        print("方法1: 从东方财富API获取全部A股...")
+        print("\n方法1: 从东方财富API获取全部A股...")
         
         # 定义各个板块的查询参数
         markets = [
@@ -100,41 +291,6 @@ def get_stock_list():
             
     except Exception as e:
         print(f"\n从东方财富获取失败: {e}")
-    
-    # 方法2: 尝试使用akshare获取（如果已安装）
-    try:
-        print("\n方法2: 尝试使用akshare库获取...")
-        import akshare as ak
-        
-        # 获取沪深A股
-        df_a = ak.stock_info_a_code_name()
-        
-        for _, row in df_a.iterrows():
-            code = row['code']
-            name = row['name']
-            
-            # 确定前缀
-            if code.startswith('6') or code.startswith('688'):
-                prefix = 'sh'
-            else:
-                prefix = 'sz'
-            
-            if code not in seen_codes:
-                seen_codes.add(code)
-                all_stocks.append({
-                    'code': f'{prefix}{code}',
-                    'name': name,
-                    'original_code': code
-                })
-        
-        if len(all_stocks) > 100:
-            print(f"✓ 通过akshare成功获取 {len(all_stocks)} 只股票")
-            return all_stocks
-            
-    except ImportError:
-        print("  akshare未安装，跳过")
-    except Exception as e:
-        print(f"  akshare获取失败: {e}")
     
     # 方法3: 生成常见的股票代码范围
     print("\n方法3: 生成A股常见代码范围...")
@@ -262,7 +418,8 @@ def get_stock_list():
     ]
 
 
-def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['放量启动', '底背离'], match_mode='OR', require_uptrend=False):
+def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['放量启动', '底背离'], 
+                     match_mode='OR', require_uptrend=False, use_enhanced=True, fundamental_config=None):
     """
     检查股票是否有买入信号
     
@@ -273,6 +430,8 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
         target_signals: 目标信号列表，如 ['放量启动', '底背离']
         match_mode: 'OR' 表示满足任意一个即可，'AND' 表示必须同时满足
         require_uptrend: 是否要求当前必须处于上升趋势（EMA6 > EMA18）
+        use_enhanced: 是否使用增强版指标（包含OBV、量比等）
+        fundamental_config: 基本面筛选配置，None表示使用默认配置
     
     返回:
         dict: 包含信号信息，如果没有信号返回None
@@ -283,6 +442,17 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
         
         if df is None or len(df) < 50:  # 至少需要50天数据
             return None
+        
+        # 获取股票名称和最新价格
+        latest_price = df['close'].iloc[-1]
+        stock_name = stock_code  # 默认使用代码作为名称
+        
+        # 应用基本面筛选（如果启用）
+        if fundamental_config is None or fundamental_config.get('enable', True):
+            passed, reason = apply_fundamental_filters(stock_code, stock_name, latest_price, fundamental_config)
+            if not passed:
+                # 基本面筛选不通过，直接返回None
+                return None
         
         # 创建Mai指标计算器
         indicator = MaiIndicator(df)
@@ -312,8 +482,15 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
             temp_signals = []
             
             # 检查各种信号
-            if row['放量启动']:
-                temp_signals.append('放量启动')
+            # 如果使用增强版，优先检查增强版信号
+            if use_enhanced and '放量启动' in target_signals:
+                if row['放量启动_增强']:
+                    temp_signals.append('放量启动_增强')
+                elif row['放量启动']:
+                    temp_signals.append('放量启动')
+            else:
+                if row['放量启动']:
+                    temp_signals.append('放量启动')
             
             if row['二浪回踩']:
                 temp_signals.append('二浪回踩')
@@ -323,6 +500,13 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
                 
             if row['底背离']:
                 temp_signals.append('底背离')
+            
+            # 增强版特有信号
+            if use_enhanced:
+                if row['隐蔽吸筹']:
+                    temp_signals.append('隐蔽吸筹')
+                if row['极限收敛']:
+                    temp_signals.append('极限收敛')
             
             # 根据匹配模式检查是否符合条件
             if match_mode == 'AND':
@@ -344,7 +528,7 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
             ema18 = latest_signals['EMA18']
             stop_loss = latest_signals['止损线']
             
-            return {
+            signal_info = {
                 'price': latest_price,
                 'signals': found_signals,
                 'signal_date': signal_date,
@@ -356,6 +540,19 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
                 'has_底背离': latest_signals['底背离'],
                 'has_顶背离': latest_signals['顶背离']
             }
+            
+            # 添加增强版指标信息
+            if use_enhanced:
+                signal_info.update({
+                    'OBV向上': latest_signals['OBV向上'],
+                    '量比': latest_signals['量比'],
+                    '温和放量': latest_signals['温和放量'],
+                    'MA18向上': latest_signals['MA18向上'],
+                    '隐蔽吸筹': latest_signals['隐蔽吸筹'],
+                    '极限收敛': latest_signals['极限收敛'],
+                })
+            
+            return signal_info
         
         return None
         
@@ -364,7 +561,8 @@ def check_buy_signal(stock_code, data_days=100, recent_days=5, target_signals=['
         return None
 
 
-def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '底背离'], match_mode='OR', require_uptrend=False, delay=0.1):
+def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '底背离'], match_mode='OR', 
+                               require_uptrend=False, delay=0.1, use_enhanced=True, fundamental_config=None):
     """
     筛选出现Mai买入信号的股票
     
@@ -374,6 +572,8 @@ def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '
         match_mode: 'OR' 表示满足任意一个即可，'AND' 表示必须同时满足
         require_uptrend: 是否要求当前必须处于上升趋势（EMA6 > EMA18）
         delay: 请求延迟（秒），避免请求过快
+        use_enhanced: 是否使用增强版指标（包含OBV、量比等）
+        fundamental_config: 基本面筛选配置
     
     返回:
         pd.DataFrame: 筛选结果
@@ -411,7 +611,9 @@ def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '
             print(f"进度: {idx}/{total} ({idx/total*100:.1f}%)")
         
         # 检查买入信号
-        signal_info = check_buy_signal(code, recent_days=recent_days, target_signals=target_signals, match_mode=match_mode, require_uptrend=require_uptrend)
+        signal_info = check_buy_signal(code, recent_days=recent_days, target_signals=target_signals, 
+                                      match_mode=match_mode, require_uptrend=require_uptrend,
+                                      use_enhanced=use_enhanced, fundamental_config=fundamental_config)
         
         if signal_info is not None:
             # 将信号列表转为字符串
@@ -427,7 +629,7 @@ def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '
             else:
                 signal_strength = '⭐ 一般'
             
-            results.append({
+            result_dict = {
                 '股票代码': original_code,
                 '股票名称': name,
                 '最新价': round(signal_info['price'], 2),
@@ -439,7 +641,16 @@ def screen_stocks_by_mai_signal(recent_days=5, target_signals=['放量启动', '
                 '信号日期': signal_info['signal_date'].strftime('%Y-%m-%d'),
                 '趋势': '上升' if signal_info['is_uptrend'] else '下降',
                 '更新日期': signal_info['latest_date'].strftime('%Y-%m-%d')
-            })
+            }
+            
+            # 添加增强版指标列
+            if use_enhanced and 'OBV向上' in signal_info:
+                result_dict['OBV向上'] = '✓' if signal_info['OBV向上'] else '✗'
+                result_dict['量比'] = round(signal_info['量比'], 2)
+                result_dict['温和放量'] = '✓' if signal_info['温和放量'] else '✗'
+                result_dict['MA18向上'] = '✓' if signal_info['MA18向上'] else '✗'
+            
+            results.append(result_dict)
             
             print(f"✓ 发现: {name}({original_code}) - {signal_str} {signal_strength} [{signal_info['signal_date'].strftime('%m-%d')}]")
         
@@ -491,7 +702,8 @@ def save_to_csv(df, output_dir='results'):
     print(f"结果也已保存到: {root_filepath}")
 
 
-def main(recent_days=5, target_signals=['放量启动', '底背离'], match_mode='OR', require_uptrend=False):
+def main(recent_days=5, target_signals=['放量启动', '底背离'], match_mode='OR', require_uptrend=False, 
+         use_enhanced=True, fundamental_config=None):
     """
     主函数
     
@@ -500,6 +712,8 @@ def main(recent_days=5, target_signals=['放量启动', '底背离'], match_mode
         target_signals: 目标信号列表
         match_mode: 'OR' 表示满足任意一个即可，'AND' 表示必须同时满足
         require_uptrend: 是否要求当前必须处于上升趋势（EMA6 > EMA18）
+        use_enhanced: 是否使用增强版指标（包含OBV、量比等）
+        fundamental_config: 基本面筛选配置
     """
     if match_mode == 'AND':
         signal_desc = ' + '.join(target_signals)
@@ -511,14 +725,20 @@ def main(recent_days=5, target_signals=['放量启动', '底背离'], match_mode
     if require_uptrend:
         condition_desc += " + EMA6在EMA18上方"
     
+    version = "v5.0" if use_enhanced else "v4.0"
     print("=" * 70)
-    print("A股Mai指标买入信号筛选器 v4.0")
+    print(f"A股Mai指标买入信号筛选器 {version}")
+    if use_enhanced:
+        print("【增强版】包含: OBV能量潮 + 量比分析 + 基本面筛选")
     print(f"筛选条件: 最近{recent_days}天内{condition_desc}")
     print("=" * 70)
     print()
     
     # 筛选股票
-    df = screen_stocks_by_mai_signal(recent_days=recent_days, target_signals=target_signals, match_mode=match_mode, require_uptrend=require_uptrend, delay=0.1)
+    df = screen_stocks_by_mai_signal(recent_days=recent_days, target_signals=target_signals, 
+                                    match_mode=match_mode, require_uptrend=require_uptrend, 
+                                    delay=0.1, use_enhanced=use_enhanced, 
+                                    fundamental_config=fundamental_config)
     
     # 显示结果
     if not df.empty:
