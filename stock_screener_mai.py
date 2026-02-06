@@ -3,7 +3,7 @@
 A股Mai指标买入信号筛选器
 根据 mai_indicator.py 中的技术指标筛选出现买入信号的股票
 """
-
+import requests
 import json
 import time
 import os
@@ -22,85 +22,7 @@ def get_stock_list():
     print("正在获取A股全部股票列表...")
     all_stocks = []
     seen_codes = set()  # 用于去重
-    
-    # 方法1: 尝试从东方财富获取
-    try:
-        print("方法1: 从东方财富API获取全部A股...")
-        
-        # 定义各个板块的查询参数
-        markets = [
-            # 沪市主板 (600, 601, 603, 605等开头)
-            {'name': '沪市主板', 'fs': 'm:1+t:2,m:1+t:23', 'prefix': 'sh'},
-            # 科创板 (688开头)
-            {'name': '科创板', 'fs': 'm:1+t:23', 'prefix': 'sh'},
-            # 深市主板 (000, 001开头)
-            {'name': '深市主板', 'fs': 'm:0+t:6,m:0+t:13', 'prefix': 'sz'},
-            # 深市中小板 (002, 003开头)
-            {'name': '深市中小板', 'fs': 'm:0+t:7,m:0+t:13', 'prefix': 'sz'},
-            # 创业板 (300开头)
-            {'name': '创业板', 'fs': 'm:0+t:80', 'prefix': 'sz'},
-        ]
-        
-        for market in markets:
-            market_name = market['name']
-            fs_param = market['fs']
-            prefix = market['prefix']
-            
-            print(f"  正在获取{market_name}...")
-            page = 1
-            market_count = 0
-            
-            while True:
-                try:
-                    url = f'http://push2.eastmoney.com/api/qt/clist/get?pn={page}&pz=1000&po=1&np=1&fltt=2&invt=2&fid=f3&fs={fs_param}&fields=f12,f14'
-                    response = requests.get(url, timeout=15)
-                    data = response.json()
-                    
-                    if not data or 'data' not in data or not data['data']:
-                        break
-                    
-                    if 'diff' not in data['data'] or not data['data']['diff']:
-                        break
-                    
-                    items = data['data']['diff']
-                    if not items:
-                        break
-                    
-                    for item in items:
-                        code = item['f12']
-                        name = item['f14']
-                        
-                        # 去重
-                        if code not in seen_codes:
-                            seen_codes.add(code)
-                            all_stocks.append({
-                                'code': f'{prefix}{code}',
-                                'name': name,
-                                'original_code': code
-                            })
-                            market_count += 1
-                    
-                    # 如果返回的数量小于1000，说明已经是最后一页
-                    if len(items) < 1000:
-                        break
-                    
-                    page += 1
-                    time.sleep(0.1)  # 避免请求过快
-                    
-                except Exception as e:
-                    print(f"    {market_name}第{page}页获取失败: {e}")
-                    break
-            
-            print(f"    {market_name}获取完成: {market_count} 只")
-        
-        if len(all_stocks) > 100:
-            print(f"\n✓ 成功获取全部A股 {len(all_stocks)} 只股票")
-            print(f"  包括: 沪市主板、科创板、深市主板、中小板、创业板")
-            return all_stocks
-            
-    except Exception as e:
-        print(f"\n从东方财富获取失败: {e}")
-    
+      
     # 方法2: 尝试使用akshare获取（如果已安装）
     try:
         print("\n方法2: 尝试使用akshare库获取...")
@@ -550,18 +472,28 @@ def main(recent_days=5, target_signals=['放量启动', '底背离'], match_mode
         
         # 保存到CSV
         save_to_csv(df)
-    else:
-        print(f"\n未找到最近{recent_days}天内{condition_desc}的股票")
-        print("\n说明：")
-        print(f"  - 当前市场在最近{recent_days}天内没有满足条件的股票")
-        print("  - 可以尝试：")
-        print("    1. 增加天数范围（修改 recent_days 参数）")
-        print("    2. 修改信号组合（修改 target_signals 参数）")
-        print("    3. 改变匹配模式（'OR' 或 'AND'）")
-        print("    4. 等待市场调整后或趋势转好时再次运行")
+        # === 暴力添加：只要跑完 main 就发微信 ===
+    if not df.empty:
+        print("发现信号，正在推送微信...")
+        send_wechat_msg(df)
+        
+def send_wechat_msg(df):
+    # 下面所有的行，开头都要按一下键盘上的 Tab 键，或者敲 4 个空格
+    token = '1596cc7d872c4ea0bfa5ca1b347bacce' 
+    if not token or token == '你的TOKEN':
+        return
+        
+    title = f"今日A股Mai筛选报告({len(df)}只)"
+    names = "、".join(df['股票名称'].head(5).tolist())
+    content = f"筛选完成！共发现{len(df)}只符合条件的股票。\n前五名为：{names}"
     
-    print("\n程序执行完毕！")
-
+    url = f'http://www.pushplus.plus/send?token={token}&title={title}&content={content}&topic=8888'
+    try:
+        import requests
+        requests.get(url, timeout=10)
+        print("✓ 微信通知已发出")
+    except Exception as e:
+        print(f"× 微信推送失败: {e}")
 
 if __name__ == '__main__':
     main()

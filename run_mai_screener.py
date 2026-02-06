@@ -4,7 +4,7 @@ A股Mai指标买入信号筛选器 - 便捷运行脚本
 可以快速调整参数
 """
 
-from stock_screener_mai import main
+from stock_screener_mai import main,send_wechat_msg
 
 # ============ 配置参数 ============
 RECENT_DAYS = 3      # 查看最近多少天内的买入信号
@@ -17,7 +17,7 @@ RECENT_DAYS = 3      # 查看最近多少天内的买入信号
 TARGET_SIGNALS = ['放量启动', '底背离']
 
 # 匹配模式
-MATCH_MODE = 'OR'    # 'OR' = 满足任意一个即可（放量启动 或 底背离）
+MATCH_MODE = 'AND'    # 'OR' = 满足任意一个即可（放量启动 或 底背离）
                      # 'AND' = 必须同时满足（放量启动 且 底背离）
 
 # 趋势要求
@@ -34,4 +34,6 @@ REQUIRE_UPTREND = True   # True = 必须EMA6在EMA18上方（上升趋势）
 # ==================================
 
 if __name__ == '__main__':
-    main(recent_days=RECENT_DAYS, target_signals=TARGET_SIGNALS, match_mode=MATCH_MODE, require_uptrend=REQUIRE_UPTREND)
+    # 1. 运行主函数，并用一个变量 result_df 把结果接住
+    result_df = main(recent_days=RECENT_DAYS, target_signals=TARGET_SIGNALS, match_mode=MATCH_MODE, require_uptrend=REQUIRE_UPTREND)
+    

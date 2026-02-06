@@ -4,7 +4,7 @@ A股Mai指标买入信号筛选器 - 小规模测试版
 只筛选前100只股票，用于快速测试
 """
 
-from stock_screener_mai import screen_stocks_by_mai_signal, get_stock_list, save_to_csv
+from stock_screener_mai import screen_stocks_by_mai_signal, get_stock_list, save_to_csv,send_wechat_msg
 
 # ============ 配置参数 ============
 RECENT_DAYS = 3
@@ -85,5 +85,8 @@ else:
     print("\n💡 这是正常的，可能的原因：")
     print(f"  - 前{TEST_LIMIT}只股票中确实没有符合条件的")
     print(f"  - 建议运行全量筛选: python3 run_mai_screener.py")
-
+# 在 main() 执行完之后加上这一行
+if not df.empty:
+    send_wechat_msg(df)
+    
 print("\n程序执行完毕！")
